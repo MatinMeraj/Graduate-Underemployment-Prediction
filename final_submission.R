@@ -14,13 +14,10 @@ invisible(lapply(pkgs, library, character.only = TRUE))
 train_raw <- readr::read_csv("train.csv", show_col_types = FALSE)
 test_raw  <- readr::read_csv("test.csv", show_col_types = FALSE)
 
-# --- Detect the target column name safely ---
-# Your dataset has used "overqualified" in earlier screenshots.
-# This block supports either "overqualified" or "overqualified".
-target_candidates <- c("overqualified", "overqualified")
-target_col <- target_candidates[target_candidates %in% names(train_raw)][1]
-if (is.na(target_col)) {
-  stop("Target column not found. Expected one of: ", paste(target_candidates, collapse = ", "))
+# --- Confirm the target column is present ---
+target_col <- "overqualified"
+if (!(target_col %in% names(train_raw))) {
+  stop("Target column '", target_col, "' not found in train.csv.")
 }
 
 # --- Basic checks ---
@@ -70,6 +67,10 @@ params <- list(
   min_child_weight = 2,
   subsample = 0.9,
   colsample_bytree = 0.9,
+  # Classes are mildly imbalanced (~1.6 negatives per positive).
+  # scale_pos_weight up-weights the positive ("overqualified") class.
+  # We use 0.8 * ratio rather than the full ratio so the correction is
+  # gentle -- the full ratio tended to over-predict the positive class.
   scale_pos_weight = 0.8 * ratio
 )
 
@@ -119,16 +120,18 @@ cat("Training AUC (diagnostic):", as.numeric(train_auc), "\n")
 dtest <- xgb.DMatrix(data = X_test)
 test_pred <- predict(final_model, dtest)
 
+submission <- tibble(
+  id = test_raw$id,
+  overqualified = test_pred
+)
+
+# Sanity check: predicted probabilities should spread across [0, 1],
+# not collapse to all-0 or all-1.
 hist(
   submission$overqualified,
   breaks = 30,
   main = "Predicted Underemployment Probabilities",
   xlab = "Probability"
-)
-
-submission <- tibble(
-  id = test_raw$id,
-  overqualified = test_pred
 )
 
 readr::write_csv(submission, "submission.csv")
