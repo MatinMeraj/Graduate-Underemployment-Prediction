@@ -135,3 +135,84 @@ hist(
 )
 
 readr::write_csv(submission, "submission.csv")
+
+
+## ============================================================
+## HONEST EVALUATION
+## ------------------------------------------------------------
+## The model above (final_model) is trained on ALL training rows
+## and used to produce the competition submission. We canNOT
+## measure its real performance on test.csv because test.csv has
+## no labels. So below we train a SEPARATE model on an 80% slice
+## and evaluate it on the held-out 20% it never saw -- these are
+## the numbers we can actually defend (AUC, confusion matrix,
+## precision / recall / F1).
+## ============================================================
+
+set.seed(42)
+
+# ---- 80/20 stratified held-out split on the training rows ----
+# (stratified = keep the same ~38% positive rate in both halves)
+pos_idx <- which(y == 1)
+neg_idx <- which(y == 0)
+val_pos <- sample(pos_idx, round(0.20 * length(pos_idx)))
+val_neg <- sample(neg_idx, round(0.20 * length(neg_idx)))
+val_rows <- c(val_pos, val_neg)
+
+X_tr_eval <- X_train[-val_rows, ]
+X_val     <- X_train[ val_rows, ]
+y_tr_eval <- y[-val_rows]
+y_val     <- y[ val_rows]
+
+dtrain_eval <- xgb.DMatrix(data = X_tr_eval, label = y_tr_eval)
+dval        <- xgb.DMatrix(data = X_val,     label = y_val)
+
+# Train on the 80% only, using the same params + best_nrounds found above
+model_eval <- xgb.train(
+  params  = params,
+  data    = dtrain_eval,
+  nrounds = best_nrounds,
+  verbose = 0
+)
+
+# ---- Held-out probabilities and AUC ----
+val_pred <- predict(model_eval, dval)
+val_auc  <- as.numeric(auc(roc(response = y_val, predictor = val_pred)))
+cat("\n==== HELD-OUT EVALUATION (20% never seen in training) ====\n")
+cat(sprintf("Held-out AUC: %.3f\n", val_auc))
+
+# ---- Confusion matrix + precision / recall / F1 at threshold 0.5 ----
+thr    <- 0.5
+pred01 <- as.integer(val_pred >= thr)
+
+TP <- sum(pred01 == 1 & y_val == 1)
+TN <- sum(pred01 == 0 & y_val == 0)
+FP <- sum(pred01 == 1 & y_val == 0)
+FN <- sum(pred01 == 0 & y_val == 1)
+
+precision <- TP / (TP + FP)
+recall    <- TP / (TP + FN)
+f1        <- 2 * precision * recall / (precision + recall)
+accuracy  <- (TP + TN) / length(y_val)
+
+cat(sprintf("\nConfusion matrix @ threshold %.2f\n", thr))
+cat("            pred=0   pred=1\n")
+cat(sprintf("actual=0  %7d  %7d\n", TN, FP))
+cat(sprintf("actual=1  %7d  %7d\n", FN, TP))
+cat(sprintf("\nAccuracy:  %.3f\n", accuracy))
+cat(sprintf("Precision: %.3f\n", precision))
+cat(sprintf("Recall:    %.3f\n", recall))
+cat(sprintf("F1:        %.3f\n", f1))
+
+# ---- ROC curve plot (save to file for the README) ----
+roc_obj <- roc(response = y_val, predictor = val_pred)
+png("roc_curve.png", width = 900, height = 900, res = 150)
+plot(roc_obj, col = "#c9743d", lwd = 2.5,
+     main = "ROC Curve - Held-out Validation Set",
+     legacy.axes = TRUE)
+abline(a = 0, b = 1, lty = 2, col = "gray50")
+legend("bottomright",
+       legend = sprintf("XGBoost (AUC = %.3f)", val_auc),
+       col = "#c9743d", lwd = 2.5, bty = "n")
+dev.off()
+cat("\nSaved roc_curve.png\n")
